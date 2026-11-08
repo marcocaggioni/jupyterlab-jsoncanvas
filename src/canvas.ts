@@ -293,8 +293,10 @@ export class CanvasPanel extends Widget {
    * The library's Markdown file-node component, replaced: instead of
    * fetching the file over HTTP (which cannot work for drive files),
    * fetch it through the contents API and render the Markdown in the
-   * card. The card keeps its file identity — a header shows the
-   * filename with an Open link, and double-click opens the file.
+   * card. The card keeps its file identity — the filename is the
+   * library's own caption above the card (it paints every file node's
+   * name there, on its canvas), the header carries an Open link, and
+   * double-click opens the file.
    * Anything that is not a plain `.md` file, or cannot be fetched,
    * keeps the bare filename label.
    */
@@ -329,15 +331,11 @@ export class CanvasPanel extends Widget {
 
     const header = document.createElement('div');
     header.className = 'jp-JSONCanvas-mdheader';
-    const label = document.createElement('span');
-    label.className = 'jp-JSONCanvas-mdheader-name';
-    label.textContent = name;
-    label.title = file;
-    header.appendChild(label);
     const open = document.createElement('a');
     open.className = 'jp-JSONCanvas-mdheader-open';
     open.textContent = 'Open';
     open.href = '#';
+    open.title = file;
     open.addEventListener('click', event => {
       event.preventDefault();
       void this._openFileNode(node);

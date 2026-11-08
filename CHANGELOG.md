@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.1 — 2026-11-08
+
+- **Markdown file cards no longer repeat the filename.** The library
+  paints every file node's filename as a caption above the card (on
+  its canvas, unconditionally — no option or DOM hook suppresses it),
+  so the card's own header showed the same name twice, and the
+  caption collided with the "renders Markdown" edge-label pill. The
+  header now carries just the **Open** link; the filename is the
+  library's caption.
+- The demo board's Markdown file node is taller (280 px) so the whole
+  note shows — at 150 px its two bullets were in the DOM but
+  invisible — and sits lower (y 400) so the edge-label pill clears
+  the filename caption; the group grew to match (720 px).
+
 ## 0.3.0 — 2026-11-08
 
 - **Markdown file nodes render their content.** File nodes pointing at
