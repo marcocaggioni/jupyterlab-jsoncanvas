@@ -1,15 +1,16 @@
 # jupyterlab-jsoncanvas
 
-A read-only viewer for [JSON Canvas](https://jsoncanvas.org/) (`.canvas`)
-files in JupyterLab and JupyterLite.
+A viewer for [JSON Canvas](https://jsoncanvas.org/) (`.canvas`)
+files in JupyterLab and JupyterLite, with in-place editing of text
+cards.
 
 Double-click a `.canvas` file and the board renders: text cards (Markdown),
 file cards, link cards (clickable, with a live preview), group containers,
 and edges with arrowheads — with pan, zoom, fit-to-view, a minimap, and
 light / dark themes that follow JupyterLab. File cards pointing at `.md`
-files render the file's Markdown inside the card. The board itself is not
-visually edited — edit the `.canvas` JSON in the text editor and the board
-follows live — and saving is the standard Ctrl+S.
+files render the file's Markdown inside the card. Double-click a text
+card to edit it right on the board — the edit is written back into the
+`.canvas` file — and saving is the standard Ctrl+S.
 
 Rendering is done by the [Hesprs JSON Canvas Viewer](https://github.com/Hesprs/JSON-Canvas-Viewer)
 (`json-canvas-viewer` on npm, MIT), which implements 100% of the JSON Canvas
@@ -39,6 +40,11 @@ double-click it.
 - Edit the `.canvas` JSON in the text editor and the board follows live
   — the viewer and the editor share the same document model, so no save
   is needed to see the change.
+- Double-click a text card to edit it in place: type the card's Markdown
+  right on the board, then click away or press Ctrl/Cmd+Enter to save
+  (Esc cancels). The edit is written back into the `.canvas` file, so
+  the JSON pane stays in sync. Markdown file cards stay read-only —
+  double-click one to open the file itself instead.
 - Edges with sides (`top` / `right` / `bottom` / `left`), ends
   (`none` / `arrow`), labels, and preset (`"1"`–`"6"`) or hex colors.
 - Pan by dragging the background; zoom with the mouse wheel or the
@@ -47,9 +53,9 @@ double-click it.
 - Light / dark theme follows JupyterLab.
 - Files that fail to parse, or are not JSON objects with `nodes` / `edges`
   arrays, are reported in the viewer instead of crashing it.
-- The board itself is not visually edited: nodes cannot be dragged or
-  resized in the viewer; the document is opened read-only and the canvas
-  file is only ever written by the standard save.
+- Nodes cannot be dragged or resized in the viewer; deeper visual
+  editing is a later step. The canvas file is written by card edits
+  and by the standard save.
 
 ## Install
 
@@ -78,7 +84,8 @@ federated extension.
 
 Drop any `.canvas` file (JSON Canvas 1.0, as exported by Obsidian) into the
 file browser and double-click it. That is all there is to it — there are no
-settings and no editing.
+settings. Text cards edit in place on double-click; everything else is
+edited as JSON.
 
 An example board is in [`example/`](example/): `json-canvas-demo.canvas`
 exercises groups, text cards with Markdown, a link card, a Markdown file

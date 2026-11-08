@@ -1,5 +1,6 @@
 // jupyterlab-jsoncanvas — viewer for JSON Canvas (.canvas) files, with
-// Markdown file nodes rendered through the JupyterLab contents API.
+// Markdown file nodes rendered through the JupyterLab contents API and
+// in-place editing of text cards.
 //
 // Rendering is done by the Hesprs JSON Canvas Viewer library
 // (https://github.com/Hesprs/JSON-Canvas-Viewer, MIT), which implements
@@ -22,11 +23,24 @@
 // fetched, keeps the bare filename label. The fetched content is only
 // ever displayed — the canvas file itself is never rewritten.
 //
+// Text nodes: the panel also overrides the library's text-node
+// component, so a double-click on a text card turns it into a textarea
+// editing the node's raw Markdown. Committing writes the new text back
+// into the shared document model (so the JSON pane stays in sync and
+// the file is saved by the standard Ctrl+S / autosave), and the board
+// re-renders. Markdown file cards stay read-only — editing one would
+// mean editing the `.md` file it points at.
+//
 // JSON editing: the viewer and the text editor share the same document
 // model (both use the `text` model factory), so editing the `.canvas`
 // JSON in a second pane re-renders the board live, with no save needed.
 // Saving is the standard JupyterLab Ctrl+S, through the contents API to
 // whichever drive the file is on.
+//
+// View: the library re-fits the whole board on every `load()`, so a
+// re-render would drop the user back to the fit view. The panel saves
+// the pan / zoom before each load and restores it afterwards (unless
+// the board's geometry changed, in which case the fresh fit stands).
 
 import { Contents } from '@jupyterlab/services';
 import { CommandRegistry } from '@lumino/commands';
@@ -42,9 +56,12 @@ import {
   Controls,
   JSONCanvasViewer,
   Minimap,
+  internal,
   parser,
+  type Hook,
   type JSONCanvas,
   type JSONCanvasFileNode,
+  type JSONCanvasTextNode,
   type JSONCanvasViewerInterface
 } from 'json-canvas-viewer';
 
@@ -116,6 +133,36 @@ function parseCanvas(
   // The library's type marks edge sides required, but the spec leaves
   // them optional, so the raw object goes through untouched.
   return { data: parsed as unknown as JSONCanvas, error: null };
+}
+
+/** The board's viewport: pan offsets, zoom, and the bounds of its
+ * nodes, as the library's DataManager holds them. */
+interface ICanvasView {
+  offsetX: number;
+  offsetY: number;
+  scale: number;
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  /** False when the view came from the overlays layer's transform,
+   * which carries no bounds — the caller then restores blind. */
+  boundsKnown: boolean;
+}
+
+/**
+ * Serialize a canvas object back to text in the file's own shape: a
+ * single-line file stays single-line, a pretty-printed file keeps its
+ * indent, and a trailing newline is preserved when there was one — so
+ * a card edit changes only the edited text, not the whole file.
+ */
+function stringifyCanvas(parsed: unknown, raw: string): string {
+  const trailing = raw.endsWith('\n') ? '\n' : '';
+  if (!raw.includes('\n')) {
+    return JSON.stringify(parsed) + trailing;
+  }
+  const indent = /\n( +)"/.exec(raw);
+  return JSON.stringify(parsed, null, indent ? indent[1].length : 2) + trailing;
 }
 
 /**
@@ -361,6 +408,252 @@ export class CanvasPanel extends Widget {
     }
   };
 
+  /**
+   * The library's text-node component, replaced with an editable one:
+   * the card renders its Markdown exactly as the library would, and a
+   * double-click turns it into a textarea editing the node's raw
+   * Markdown — the same gesture as the Markdown file cards, where a
+   * double-click opens the file.
+   *
+   * Commit: click away (blur) or Ctrl/Cmd+Enter. The new text is
+   * written back into the shared document model, so the JSON pane
+   * stays in sync and the file is saved by the standard Ctrl+S /
+   * autosave. Esc cancels and the card goes back to the old text.
+   * A double-click on a link inside the card keeps the link's own
+   * behaviour. Only the text is ever written — the node's position
+   * and size are untouched.
+   */
+  private _textNode = (args: {
+    container: HTMLDivElement;
+    content: string;
+    node: JSONCanvasTextNode;
+    onBeforeUnmount: Hook;
+  }): void => {
+    const { container, content, node } = args;
+
+    const view = document.createElement('div');
+    view.className = 'JCV-parsed-content-wrapper';
+    view.innerHTML = content;
+    container.classList.add('JCV-markdown-content');
+    container.appendChild(view);
+
+    let editing = false;
+    let editor: HTMLTextAreaElement | null = null;
+    let editorWrap: HTMLDivElement | null = null;
+
+    const exitEditMode = (): void => {
+      editorWrap?.remove();
+      editorWrap = null;
+      editor = null;
+      view.style.display = '';
+    };
+
+    const commit = (): void => {
+      if (!editing || !editor) {
+        return;
+      }
+      const newText = editor.value;
+      // Clear the flag before the editor leaves the DOM: removing a
+      // focused element fires blur, and the blur handler must see
+      // that the edit is already done.
+      editing = false;
+      exitEditMode();
+      this._updateTextNode(node.id, newText);
+    };
+
+    const cancel = (): void => {
+      if (!editing) {
+        return;
+      }
+      editing = false;
+      exitEditMode();
+    };
+
+    const enterEditMode = (): void => {
+      if (editing) {
+        return;
+      }
+      editing = true;
+      view.style.display = 'none';
+
+      editorWrap = document.createElement('div');
+      editorWrap.className = 'jp-JSONCanvas-texteditor-wrap';
+      editor = document.createElement('textarea');
+      editor.className = 'jp-JSONCanvas-texteditor';
+      editor.value = node.text;
+      editor.spellcheck = false;
+      editor.setAttribute('aria-label', 'Edit card text');
+      editor.addEventListener('keydown', event => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          event.stopPropagation();
+          cancel();
+        } else if (
+          event.key === 'Enter' &&
+          (event.ctrlKey || event.metaKey)
+        ) {
+          event.preventDefault();
+          commit();
+        }
+      });
+      // Clicking away commits; the blur fires before the click that
+      // caused it, so a click on another card saves first and selects
+      // second. A plain Enter stays a newline — the text is Markdown.
+      editor.addEventListener('blur', () => {
+        commit();
+      });
+      editorWrap.appendChild(editor);
+      const hint = document.createElement('div');
+      hint.className = 'jp-JSONCanvas-texteditor-hint';
+      hint.textContent = 'Ctrl/⌘+Enter to save · Esc to cancel';
+      editorWrap.appendChild(hint);
+      container.appendChild(editorWrap);
+      editor.focus();
+      editor.setSelectionRange(editor.value.length, editor.value.length);
+    };
+
+    // The listener sits on the overlay container (the content's
+    // parent) so the first click of the pair still reaches it while
+    // the card is unselected and the library's click layer covers the
+    // content — the click selects the card, the double-click then
+    // opens the editor.
+    const overlay = container.parentElement ?? container;
+    overlay.addEventListener('dblclick', event => {
+      if ((event.target as Element | null)?.closest?.('a')) {
+        return;
+      }
+      enterEditMode();
+    });
+
+    // If the overlay is torn down while an edit is open — the JSON
+    // pane changed the same node, the file was reloaded, the panel
+    // closed — keep the typed text: commit it instead of dropping it.
+    // A commit of our own already cleared `editing` before the
+    // re-render, so this is a no-op on the normal path.
+    args.onBeforeUnmount.subscribe(() => {
+      if (editing) {
+        commit();
+      }
+    });
+  };
+
+  /**
+   * Write one text node's new text back into the shared document
+   * model. Only that node's `text` changes; every other node, edge,
+   * and the file's own formatting are left alone. A no-op or an
+   * unparseable file writes nothing, so a JSON pane mid-edit is never
+   * clobbered.
+   */
+  private _updateTextNode(nodeId: string, newText: string): void {
+    if (this._context.isDisposed) {
+      return;
+    }
+    const raw = this._context.model.toString();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    const root = asRecord(parsed);
+    const nodes = root && Array.isArray(root.nodes) ? root.nodes : null;
+    if (!nodes) {
+      return;
+    }
+    const node = nodes
+      .map(value => asRecord(value))
+      .find(record => record?.id === nodeId && record?.type === 'text');
+    if (!node || node.text === newText) {
+      return;
+    }
+    node.text = newText;
+    try {
+      this._context.model.fromString(stringifyCanvas(parsed, raw));
+    } catch (error) {
+      console.error(
+        '[jupyterlab-jsoncanvas] Failed to write the card edit:',
+        error
+      );
+    }
+  }
+
+  /**
+   * The board's current viewport, read from the library's DataManager
+   * through its exported `internal` modules, or — if that ever stops
+   * working — parsed out of the overlays layer's own transform, which
+   * the library keeps in sync on every redraw. Returns null when
+   * neither source is available; the caller then lets the fresh fit
+   * stand.
+   */
+  private _captureView(): ICanvasView | null {
+    const viewer = this._viewer;
+    if (!viewer) {
+      return null;
+    }
+    try {
+      const data = viewer.container.get(internal.DataManager).data;
+      const bounds = data.nodeBounds;
+      return {
+        offsetX: data.offsetX,
+        offsetY: data.offsetY,
+        scale: data.scale,
+        minX: bounds.minX,
+        minY: bounds.minY,
+        maxX: bounds.maxX,
+        maxY: bounds.maxY,
+        boundsKnown: true
+      };
+    } catch {
+      // Fall through to the DOM transform below.
+    }
+    const layer = this._host.querySelector('#overlays');
+    if (!layer) {
+      return null;
+    }
+    const match =
+      /translate\(\s*(-?[\d.]+)px,\s*(-?[\d.]+)px\)\s*scale\(\s*(-?[\d.]+)\)/.exec(
+        (layer as HTMLElement).style.transform
+      );
+    if (!match) {
+      return null;
+    }
+    return {
+      offsetX: Number(match[1]),
+      offsetY: Number(match[2]),
+      scale: Number(match[3]),
+      minX: 0,
+      minY: 0,
+      maxX: 0,
+      maxY: 0,
+      boundsKnown: false
+    };
+  }
+
+  /**
+   * Put the viewport back where `_captureView` found it, through the
+   * viewer's own pan / zoom. The zoom is restored first (around the
+   * container centre), then the pan, which sets the offsets exactly.
+   */
+  private _restoreView(view: ICanvasView): void {
+    const viewer = this._viewer;
+    if (!viewer || this.isDisposed) {
+      return;
+    }
+    try {
+      const centre = {
+        x: this._host.clientWidth / 2,
+        y: this._host.clientHeight / 2
+      };
+      viewer.zoomToScale(view.scale, centre);
+      viewer.panToCoords({ x: view.offsetX, y: view.offsetY });
+    } catch (error) {
+      console.warn(
+        '[jupyterlab-jsoncanvas] Could not restore the view after a re-render:',
+        error
+      );
+    }
+  }
+
   private _render(): void {
     const content = this._context.model.toString();
     const { data, error } = parseCanvas(content);
@@ -372,7 +665,36 @@ export class CanvasPanel extends Widget {
     this._clearError();
 
     if (this._viewer) {
+      // The library re-fits the whole board on every load, which would
+      // drop the user back to the fit view after each edit. Save the
+      // viewport first and put it back once the new render is in
+      // place — two animation frames land after Lumino has processed
+      // the update and the viewer's redraw loop has run. If the edit
+      // changed the board's geometry, the fresh fit stands instead.
+      const previous = this._captureView();
       this._viewer.load({ canvas: data });
+      if (previous) {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            if (this.isDisposed || !this._viewer) {
+              return;
+            }
+            const current = this._captureView();
+            if (
+              current &&
+              previous.boundsKnown &&
+              current.boundsKnown &&
+              (Math.abs(current.minX - previous.minX) > 0.5 ||
+                Math.abs(current.minY - previous.minY) > 0.5 ||
+                Math.abs(current.maxX - previous.maxX) > 0.5 ||
+                Math.abs(current.maxY - previous.maxY) > 0.5)
+            ) {
+              return;
+            }
+            this._restoreView(previous);
+          });
+        });
+      }
       return;
     }
 
@@ -382,7 +704,10 @@ export class CanvasPanel extends Widget {
         canvas: data,
         parser,
         theme: currentTheme(),
-        nodeComponents: { markdown: this._markdownFileNode }
+        nodeComponents: {
+          markdown: this._markdownFileNode,
+          text: this._textNode
+        }
       },
       [Controls, Minimap]
     );

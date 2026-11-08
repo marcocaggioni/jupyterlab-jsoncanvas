@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.4.0 — 2026-11-08
+
+- **Text cards edit in place.** Double-click a text card and it turns
+  into a textarea editing the card's raw Markdown, right on the board.
+  Click away or press Ctrl/Cmd+Enter to save — the new text is written
+  back into the `.canvas` file through the shared document model, so
+  the JSON pane stays in sync and the file is saved by the standard
+  Ctrl+S / autosave. Esc cancels and the card goes back to the old
+  text; a plain Enter stays a newline. The edit writes only that
+  node's `text` and keeps the file's own formatting, so a card edit
+  changes nothing else. Markdown file cards stay read-only (editing
+  one would mean editing the `.md` file it points at), and a
+  double-click on a link inside a card keeps the link's behaviour.
+- **Re-renders keep the viewport.** The library re-fits the whole
+  board on every `load()`, so editing the JSON in a second pane used
+  to re-frame the board on each keystroke. The panel now saves the
+  pan / zoom before each load and restores it afterwards — unless the
+  edit changed the board's geometry, in which case the fresh fit
+  stands. The same mechanism keeps the user's place after a card
+  edit commits.
+- The demo board's "Hello, canvas" card names the new gesture, and
+  grew to 280 px so the extra bullet fits.
+- Implementation: the extension now also overrides the library's
+  `text` node component via its `nodeComponents` hook (the same
+  sanctioned override point as the Markdown file node), and reads the
+  viewport back through the library's exported `internal` modules,
+  with the overlays layer's own transform as a fallback. The widget
+  factory is no longer registered read-only, since the board now
+  writes. Node dragging is still out of scope — the library binds
+  drag to panning and exposes no node-move hook, so that stays Step 3.
+
 ## 0.3.1 — 2026-11-08
 
 - **Markdown file cards no longer repeat the filename.** The library

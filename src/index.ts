@@ -6,8 +6,10 @@
 // and edges, with pan / zoom / fit-to-view, a minimap, and light / dark
 // themes. File nodes pointing at `.md` files render the file's content
 // inside the card (fetched through the contents API), with an Open link
-// and double-click to open the file. The board itself is not visually
-// edited — edit the `.canvas` JSON in the text editor and the board
+// and double-click to open the file. Text cards are editable in place:
+// double-click one and type; the edit is written back into the `.canvas`
+// file. Deeper visual editing (dragging nodes, resizing) is not in the
+// viewer — edit the `.canvas` JSON in the text editor and the board
 // follows live, and save with the standard Ctrl+S.
 
 import { JupyterFrontEnd, JupyterFrontEndPlugin } from '@jupyterlab/application';
@@ -38,7 +40,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
       name: 'JSON Canvas',
       fileTypes: ['jsoncanvas'],
       defaultFor: ['jsoncanvas'],
-      readOnly: true,
+      readOnly: false,
       contents: app.serviceManager.contents,
       commands: app.commands
     });
