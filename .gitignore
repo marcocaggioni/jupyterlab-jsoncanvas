@@ -1,0 +1,16 @@
+# Build outputs and dependencies — never committed
+node_modules/
+lib/
+dist/
+build/
+*.egg-info/
+__pycache__/
+*.pyc
+jupyterlab_jsoncanvas/labextension/
+jupyterlab_jsoncanvas/_version.py
+tsconfig.tsbuildinfo
+
+# Editor / OS
+.DS_Store
+.vscode/
+.venv/
