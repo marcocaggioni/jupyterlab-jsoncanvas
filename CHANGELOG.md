@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.0 — 2026-11-08
+
+- **Markdown file nodes render their content.** File nodes pointing at
+  plain `.md` files now show the file's Markdown inside the card,
+  instead of a bare filename. The path is resolved against the canvas
+  file's folder and fetched through the JupyterLab contents API, which
+  works on every drive (R2 and local alike) — the library's own
+  HTTP fetch cannot reach drive files. The card keeps its file
+  identity: a header shows the filename with an **Open** link, and
+  double-click opens the file itself. Fetched content is cached per
+  panel and dropped when the file is saved, so edits show up on the
+  next render. Anything that is not a plain `.md` file, or cannot be
+  fetched, keeps the bare filename label.
+- **JSON editing live-updates the board.** The viewer and the text
+  editor share the same document model, so editing the `.canvas` JSON
+  in a second pane re-renders the board with no save needed. Saving
+  stays the standard Ctrl+S, through the contents API to whichever
+  drive the file is on.
+- The demo board has a Markdown file node again
+  (`canvas-demo-note.md`), showing the new rendering.
+- Implementation: the extension overrides the library's Markdown
+  file-node component via its `nodeComponents` hook (the sanctioned
+  override point in `json-canvas-viewer` 4.3.2); the library itself is
+  unchanged.
+
 ## 0.2.0 — 2026-11-07
 
 - The renderer is now the [Hesprs JSON Canvas Viewer](https://github.com/Hesprs/JSON-Canvas-Viewer)

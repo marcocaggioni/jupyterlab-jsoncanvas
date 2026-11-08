@@ -1,10 +1,14 @@
-// jupyterlab-jsoncanvas — read-only viewer for JSON Canvas (.canvas) files.
+// jupyterlab-jsoncanvas — viewer for JSON Canvas (.canvas) files.
 //
 // Registers the `.canvas` file type (JSON Canvas 1.0, jsoncanvas.org) and
 // a document widget that renders the board with the Hesprs JSON Canvas
 // Viewer library: text cards (Markdown), file cards, link cards, groups,
 // and edges, with pan / zoom / fit-to-view, a minimap, and light / dark
-// themes. Viewer only — nothing is edited or saved.
+// themes. File nodes pointing at `.md` files render the file's content
+// inside the card (fetched through the contents API), with an Open link
+// and double-click to open the file. The board itself is not visually
+// edited — edit the `.canvas` JSON in the text editor and the board
+// follows live, and save with the standard Ctrl+S.
 
 import { JupyterFrontEnd, JupyterFrontEndPlugin } from '@jupyterlab/application';
 
@@ -18,7 +22,7 @@ import '../style/index.js';
 const plugin: JupyterFrontEndPlugin<void> = {
   id: 'jupyterlab-jsoncanvas:plugin',
   description:
-    'Read-only viewer for JSON Canvas (.canvas) files, powered by the Hesprs JSON Canvas Viewer library.',
+    'Viewer for JSON Canvas (.canvas) files, powered by the Hesprs JSON Canvas Viewer library. Markdown file nodes render their content, fetched through the contents API.',
   autoStart: true,
   activate: (app: JupyterFrontEnd): void => {
     app.docRegistry.addFileType({
@@ -34,7 +38,9 @@ const plugin: JupyterFrontEndPlugin<void> = {
       name: 'JSON Canvas',
       fileTypes: ['jsoncanvas'],
       defaultFor: ['jsoncanvas'],
-      readOnly: true
+      readOnly: true,
+      contents: app.serviceManager.contents,
+      commands: app.commands
     });
     app.docRegistry.addWidgetFactory(factory);
   }

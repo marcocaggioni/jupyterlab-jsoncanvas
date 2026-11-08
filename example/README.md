@@ -5,14 +5,17 @@
 - a **group** ("Welcome to JSON Canvas") holding the intro cards;
 - a **text** card ("Hello, canvas") with Markdown — heading, bold text, bullets;
 - a **link** card to https://jsoncanvas.org, which the viewer previews;
+- a **file** card (`canvas-demo-note.md`) — a Markdown file node, which
+  the viewer renders as a card showing the file's content, with an Open
+  link and double-click to open the file;
 - a second **text** card ("Colors") showing preset and hex colors;
 - a third **text** card with the pan / zoom / fit instructions;
 - **edges** with sides, arrow ends, labels, and preset / hex colors
-  ("read the spec", "two-way", "and so on").
+  ("read the spec", "two-way", "and so on", "renders Markdown").
 
-There is deliberately **no file node** on this board: the viewer renders file
-nodes as bare labels, not cards (see "Known limitations" in the main README),
-so the demo sticks to the node types that render well.
+The file node points at `canvas-demo-note.md` in this same folder, so
+the board works as a self-contained example: open the board, and the
+note renders inside its card.
 
 ## Try it
 

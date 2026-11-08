@@ -4,10 +4,12 @@ A read-only viewer for [JSON Canvas](https://jsoncanvas.org/) (`.canvas`)
 files in JupyterLab and JupyterLite.
 
 Double-click a `.canvas` file and the board renders: text cards (Markdown),
-link cards (clickable, with a live preview), group containers, and edges with
-arrowheads — with pan, zoom, fit-to-view, a minimap, and light / dark themes
-that follow JupyterLab. Nothing is editable and nothing is saved back; the
-file is only read.
+file cards, link cards (clickable, with a live preview), group containers,
+and edges with arrowheads — with pan, zoom, fit-to-view, a minimap, and
+light / dark themes that follow JupyterLab. File cards pointing at `.md`
+files render the file's Markdown inside the card. The board itself is not
+visually edited — edit the `.canvas` JSON in the text editor and the board
+follows live — and saving is the standard Ctrl+S.
 
 Rendering is done by the [Hesprs JSON Canvas Viewer](https://github.com/Hesprs/JSON-Canvas-Viewer)
 (`json-canvas-viewer` on npm, MIT), which implements 100% of the JSON Canvas
@@ -29,6 +31,14 @@ double-click it.
 
 - All four JSON Canvas node types: `text` (Markdown), `file`, `link`,
   `group` (labelled container).
+- File nodes pointing at plain `.md` files render the file's Markdown
+  inside the card, fetched through the JupyterLab contents API (so it
+  works on every drive, R2 and local alike). A header shows the filename
+  with an **Open** link; double-click the card to open the file itself.
+  Other file types keep the bare filename label.
+- Edit the `.canvas` JSON in the text editor and the board follows live
+  — the viewer and the editor share the same document model, so no save
+  is needed to see the change.
 - Edges with sides (`top` / `right` / `bottom` / `left`), ends
   (`none` / `arrow`), labels, and preset (`"1"`–`"6"`) or hex colors.
 - Pan by dragging the background; zoom with the mouse wheel or the
@@ -37,7 +47,9 @@ double-click it.
 - Light / dark theme follows JupyterLab.
 - Files that fail to parse, or are not JSON objects with `nodes` / `edges`
   arrays, are reported in the viewer instead of crashing it.
-- Read-only: the document is opened read-only and never written.
+- The board itself is not visually edited: nodes cannot be dragged or
+  resized in the viewer; the document is opened read-only and the canvas
+  file is only ever written by the standard save.
 
 ## Install
 
@@ -69,16 +81,17 @@ file browser and double-click it. That is all there is to it — there are no
 settings and no editing.
 
 An example board is in [`example/`](example/): `json-canvas-demo.canvas`
-exercises groups, text cards with Markdown, a link card, and labelled edges.
+exercises groups, text cards with Markdown, a link card, a Markdown file
+card (`canvas-demo-note.md`), and labelled edges.
 See [`example/README.md`](example/README.md) for what it shows.
 
 ## Known limitations
 
-- **File nodes are not rendered as cards.** The library fetches file-node
-  attachments relative to the page, so a referenced file shows as a bare
-  label rather than a preview — the path is still shown on the card.
-  Wiring attachments through the Jupyter contents API is a possible
-  follow-up. The demo board deliberately contains no file node.
+- **File nodes other than `.md` are not rendered as cards.** The library
+  fetches file-node attachments relative to the page, so a referenced
+  non-Markdown file shows as a bare label rather than a preview — the
+  path is still shown on the card. Markdown files render since 0.3.0;
+  images, audio, and video remain unrendered.
 - **The fullscreen button does nothing inside JupyterLab.** The library's
   fullscreen control has no visible effect within the Lab layout; use the
   browser's fullscreen if needed.

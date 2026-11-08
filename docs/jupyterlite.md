@@ -35,9 +35,9 @@ jupyter labextension build --core-version 4.4.10 .
 python -m build --wheel
 ```
 
-This produces `dist/jupyterlab_jsoncanvas-0.2.0-py3-none-any.whl`. A wheel
+This produces `dist/jupyterlab_jsoncanvas-0.3.0-py3-none-any.whl`. A wheel
 can be installed into a site build directly
-(`pip install /path/to/jupyterlab_jsoncanvas-0.2.0-py3-none-any.whl`) or
+(`pip install /path/to/jupyterlab_jsoncanvas-0.3.0-py3-none-any.whl`) or
 served from a URL as the site's requirement.
 
 ## Verifying the install

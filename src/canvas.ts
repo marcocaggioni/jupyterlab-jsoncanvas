@@ -1,4 +1,5 @@
-// jupyterlab-jsoncanvas — read-only viewer for JSON Canvas (.canvas) files.
+// jupyterlab-jsoncanvas — viewer for JSON Canvas (.canvas) files, with
+// Markdown file nodes rendered through the JupyterLab contents API.
 //
 // Rendering is done by the Hesprs JSON Canvas Viewer library
 // (https://github.com/Hesprs/JSON-Canvas-Viewer, MIT), which implements
@@ -7,12 +8,28 @@
 // and Minimap modules for the chrome. This file only wires the library
 // into JupyterLab: the document widget, feeding the parsed .canvas JSON
 // from the document model to the viewer, theme following, and error
-// handling. Files are only read, never written.
+// handling.
 //
-// File-node attachments are not remapped: the library fetches them
-// relative to the page, so a referenced file shows as a placeholder
-// rather than a preview. The path is still shown on the card.
+// File nodes: the library renders a file node by fetching its path over
+// HTTP, which cannot work for files that only exist in a JupyterLite
+// drive (drive files are served by the contents API, not the web
+// server). So the panel overrides the library's Markdown file-node
+// component with its own: the node path is resolved against the canvas
+// file's folder, the file is fetched through the contents API (which
+// works on every drive — R2 and local alike), and the Markdown is
+// rendered inside the card, with an Open link and double-click to open
+// the file itself. Anything that is not a plain `.md` file, or cannot be
+// fetched, keeps the bare filename label. The fetched content is only
+// ever displayed — the canvas file itself is never rewritten.
+//
+// JSON editing: the viewer and the text editor share the same document
+// model (both use the `text` model factory), so editing the `.canvas`
+// JSON in a second pane re-renders the board live, with no save needed.
+// Saving is the standard JupyterLab Ctrl+S, through the contents API to
+// whichever drive the file is on.
 
+import { Contents } from '@jupyterlab/services';
+import { CommandRegistry } from '@lumino/commands';
 import { PathExt } from '@jupyterlab/coreutils';
 import {
   ABCWidgetFactory,
@@ -27,6 +44,7 @@ import {
   Minimap,
   parser,
   type JSONCanvas,
+  type JSONCanvasFileNode,
   type JSONCanvasViewerInterface
 } from 'json-canvas-viewer';
 
@@ -35,6 +53,13 @@ import { canvasIcon } from './icons';
 type CanvasViewer = JSONCanvasViewerInterface<
   [typeof Controls, typeof Minimap]
 >;
+
+/** What a canvas panel needs from the app: the contents API for
+ * Markdown file nodes, and the command registry to open files. */
+export interface ICanvasPanelOptions {
+  contents: Contents.IManager;
+  commands: CommandRegistry;
+}
 
 /** JupyterLab's light/dark flag, from the body attribute it maintains. */
 function currentTheme(): 'light' | 'dark' {
@@ -45,6 +70,15 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+/** YAML frontmatter (`--- ... ---` at the top), stripped the way the
+ * library's own Markdown component does, so it never renders as text. */
+const FRONTMATTER = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/;
+
+function stripFrontmatter(markdown: string): string {
+  const match = FRONTMATTER.exec(markdown);
+  return match ? match[2] : markdown;
 }
 
 /**
@@ -89,15 +123,26 @@ function parseCanvas(
  */
 export class CanvasPanel extends Widget {
   private _context: DocumentRegistry.IContext<DocumentRegistry.IModel>;
+  private _contents: Contents.IManager;
+  private _commands: CommandRegistry;
   private _host: HTMLDivElement;
   private _errorBar: HTMLDivElement;
   private _viewer: CanvasViewer | null = null;
   private _themeObserver: MutationObserver | null = null;
   private _ready = false;
+  /** Fetched Markdown by resolved path, so re-renders (e.g. while the
+   * canvas JSON is edited in another pane) do not re-fetch. A save of
+   * the file drops its entry, so the next render picks up the edit. */
+  private _mdCache = new Map<string, Promise<string>>();
 
-  constructor(context: DocumentRegistry.IContext<DocumentRegistry.IModel>) {
+  constructor(
+    context: DocumentRegistry.IContext<DocumentRegistry.IModel>,
+    options: ICanvasPanelOptions
+  ) {
     super();
     this._context = context;
+    this._contents = options.contents;
+    this._commands = options.commands;
     this.addClass('jp-JSONCanvas');
     this.node.setAttribute('tabindex', '0');
 
@@ -120,9 +165,11 @@ export class CanvasPanel extends Widget {
     this._context.fileChanged.connect(() => {
       this.update();
     }, this);
+    this._contents.fileChanged.connect(this._onContentsChanged, this);
   }
 
   dispose(): void {
+    this._mdCache.clear();
     this._disposeViewer();
     super.dispose();
   }
@@ -175,6 +222,147 @@ export class CanvasPanel extends Widget {
     });
   }
 
+  /**
+   * A save (or delete / rename) of a file the board shows drops its
+   * cached Markdown, so the next render re-fetches it.
+   */
+  private _onContentsChanged(
+    sender: Contents.IManager,
+    args: Contents.IChangedArgs
+  ): void {
+    void sender;
+    for (const value of [args.oldValue, args.newValue]) {
+      if (value?.path) {
+        this._mdCache.delete(value.path);
+      }
+    }
+  }
+
+  /**
+   * Resolve a file node's `file` path against the canvas file's folder.
+   * A leading `/` is treated as drive-rooted. Remote URLs are returned
+   * unchanged (the caller treats them as unresolvable).
+   */
+  private _resolveFileNode(file: string): string {
+    if (file.includes('://')) {
+      return file;
+    }
+    const clean = file.startsWith('/') ? file.slice(1) : file;
+    return PathExt.join(PathExt.dirname(this._context.path), clean);
+  }
+
+  /** Fetch a Markdown file's text through the contents API, cached by
+   * resolved path (see `_onContentsChanged` for invalidation). A
+   * failed fetch is not cached, so the next render retries. */
+  private _fetchMarkdown(path: string): Promise<string> {
+    const cached = this._mdCache.get(path);
+    if (cached) {
+      return cached;
+    }
+    const pending = this._contents
+      .get(path, { content: true })
+      .then(model => {
+        if (model.type !== 'file' || typeof model.content !== 'string') {
+          throw new Error(`Not a text file: ${path}`);
+        }
+        return model.content;
+      })
+      .catch((error: unknown) => {
+        this._mdCache.delete(path);
+        throw error;
+      });
+    this._mdCache.set(path, pending);
+    return pending;
+  }
+
+  /** Open a file node's target with its default viewer. */
+  private async _openFileNode(node: JSONCanvasFileNode): Promise<void> {
+    const path = this._resolveFileNode(node.file);
+    try {
+      await this._commands.execute('docmanager:open', { path });
+    } catch (error) {
+      console.error(
+        '[jupyterlab-jsoncanvas] Failed to open file node:',
+        path,
+        error
+      );
+    }
+  }
+
+  /**
+   * The library's Markdown file-node component, replaced: instead of
+   * fetching the file over HTTP (which cannot work for drive files),
+   * fetch it through the contents API and render the Markdown in the
+   * card. The card keeps its file identity — a header shows the
+   * filename with an Open link, and double-click opens the file.
+   * Anything that is not a plain `.md` file, or cannot be fetched,
+   * keeps the bare filename label.
+   */
+  private _markdownFileNode = async (args: {
+    container: HTMLDivElement;
+    content: string;
+    node: JSONCanvasFileNode;
+  }): Promise<void> => {
+    const { container, node } = args;
+    const file = node.file;
+    const name = PathExt.basename(file);
+    const resolved = this._resolveFileNode(file);
+
+    // The library centers Markdown content; stack a header above the
+    // text instead.
+    container.style.flexDirection = 'column';
+    container.style.justifyContent = 'flex-start';
+    container.style.alignItems = 'stretch';
+
+    const body = document.createElement('div');
+    body.className = 'JCV-parsed-content-wrapper';
+    body.style.flex = '1 1 auto';
+    body.style.minHeight = '0';
+    body.style.maxHeight = 'none';
+
+    // Remote URLs and non-Markdown files keep the filename label.
+    if (resolved.includes('://') || !/\.md$/i.test(file)) {
+      body.textContent = name;
+      container.appendChild(body);
+      return;
+    }
+
+    const header = document.createElement('div');
+    header.className = 'jp-JSONCanvas-mdheader';
+    const label = document.createElement('span');
+    label.className = 'jp-JSONCanvas-mdheader-name';
+    label.textContent = name;
+    label.title = file;
+    header.appendChild(label);
+    const open = document.createElement('a');
+    open.className = 'jp-JSONCanvas-mdheader-open';
+    open.textContent = 'Open';
+    open.href = '#';
+    open.addEventListener('click', event => {
+      event.preventDefault();
+      void this._openFileNode(node);
+    });
+    header.appendChild(open);
+    container.appendChild(header);
+    container.appendChild(body);
+    container.addEventListener('dblclick', () => {
+      void this._openFileNode(node);
+    });
+
+    body.textContent = 'Loading…';
+    try {
+      const markdown = await this._fetchMarkdown(resolved);
+      body.innerHTML = await parser(stripFrontmatter(markdown));
+    } catch (error) {
+      console.error(
+        '[jupyterlab-jsoncanvas] Failed to load Markdown file node:',
+        resolved,
+        error
+      );
+      body.textContent = name;
+    }
+  };
+
   private _render(): void {
     const content = this._context.model.toString();
     const { data, error } = parseCanvas(content);
@@ -195,7 +383,8 @@ export class CanvasPanel extends Widget {
         container: this._host,
         canvas: data,
         parser,
-        theme: currentTheme()
+        theme: currentTheme(),
+        nodeComponents: { markdown: this._markdownFileNode }
       },
       [Controls, Minimap]
     );
@@ -215,8 +404,11 @@ export class JSONCanvasDocumentWidget extends DocumentWidget<
   CanvasPanel,
   DocumentRegistry.IModel
 > {
-  constructor(context: DocumentRegistry.IContext<DocumentRegistry.IModel>) {
-    super({ context, content: new CanvasPanel(context) });
+  constructor(
+    context: DocumentRegistry.IContext<DocumentRegistry.IModel>,
+    options: ICanvasPanelOptions
+  ) {
+    super({ context, content: new CanvasPanel(context, options) });
     this.addClass('jp-JSONCanvasDocument');
     this.title.label = PathExt.basename(context.localPath);
     this.title.caption = context.localPath;
@@ -232,9 +424,24 @@ export class JSONCanvasWidgetFactory extends ABCWidgetFactory<
   JSONCanvasDocumentWidget,
   DocumentRegistry.IModel
 > {
+  private _contents: Contents.IManager;
+  private _commands: CommandRegistry;
+
+  constructor(
+    options: DocumentRegistry.IWidgetFactoryOptions<JSONCanvasDocumentWidget> &
+      ICanvasPanelOptions
+  ) {
+    super(options);
+    this._contents = options.contents;
+    this._commands = options.commands;
+  }
+
   protected createNewWidget(
     context: DocumentRegistry.IContext<DocumentRegistry.IModel>
   ): JSONCanvasDocumentWidget {
-    return new JSONCanvasDocumentWidget(context);
+    return new JSONCanvasDocumentWidget(context, {
+      contents: this._contents,
+      commands: this._commands
+    });
   }
 }
