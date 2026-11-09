@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.3 — 2026-11-09
+
+- **Tab switches keep the exact pan / zoom.** 0.4.2 fixed half the
+  bug: the board no longer goes blank, but it re-fit on every return
+  instead of keeping the user's view (3/3 tab switches in a live
+  check). Cause: showing the tab re-renders the panel, and every
+  `load()` re-fits the board — and the re-fit was captured into the
+  viewport stash itself, because the library fires `onRefresh`
+  synchronously while it re-fits. Every restore after that faithfully
+  put back the fit view. The stash is now frozen while a load is in
+  flight (a counter, so overlapping loads cannot clear each other's
+  freeze), and the post-load restore puts back the last viewport the
+  user actually chose. If a load changes the board's geometry, the
+  fresh fit stands and the stash is pointed at it, so it stays
+  truthful for the new board.
+- In-place text editing, Markdown file cards, and JSON-pane live
+  editing are unchanged.
+
 ## 0.4.2 — 2026-11-09
 
 - **Tab switches keep the board in view — for real this time.**

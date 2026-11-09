@@ -50,6 +50,10 @@
 // last viewport seen while visible and puts it back when a real size
 // returns, using the library's own `onResize` / `onRefresh` hooks —
 // and when the panel itself is shown again, as a second trigger.
+// The stash is frozen while a load is in flight: a load re-fits, and
+// the library fires `onRefresh` synchronously while it does so, so
+// an unfrozen stash would capture the fit itself and every restore
+// after that would put the fit back instead of the user's view.
 // Restores write the pan / zoom straight into the library's
 // DataManager instead of going through its pan / zoom commands: those
 // are animated by an internal lubricator (a dispatched pan / zoom is
@@ -93,7 +97,7 @@ type CanvasViewer = JSONCanvasViewerInterface<
 /** The plugin version, stamped on the panel node so a live check can
  * read which version is actually running from the page. Keep in sync
  * with package.json. */
-const VERSION = '0.4.2';
+const VERSION = '0.4.3';
 
 /** What a canvas panel needs from the app: the contents API for
  * Markdown file nodes, and the command registry to open files. */
@@ -191,6 +195,22 @@ function stringifyCanvas(parsed: unknown, raw: string): string {
 
 /**
  * The panel that hosts one library viewer for one canvas file.
+ *
+ * Viewport bookkeeping — read this before touching `_render`,
+ * `_restoreView`, or the `onRefresh` / `onResize` hooks, because the
+ * failure mode is a race, not a missing call. The library re-fits the
+ * whole board on every `load()` (`DataManager.start` zeroes the
+ * offsets and calls `resetView`), and a `load()` fires the library's
+ * `onRefresh` hook synchronously while it does so — so a naive stash
+ * would capture the fit itself, and every restore after that would
+ * faithfully put back the fit view instead of the user's view. The
+ * stash is therefore frozen while a load is in flight
+ * (`_suppressStash`): the `onRefresh` subscriber ignores the fit,
+ * and the post-load restore puts back the last viewport the user
+ * actually chose. The same freeze is what makes the tab-switch
+ * restore work — showing the tab re-renders the panel (an update
+ * request reaches it through the MainAreaWidget), which loads, which
+ * fits, and the restore after it must not be handed the fit.
  */
 export class CanvasPanel extends Widget {
   private _context: DocumentRegistry.IContext<DocumentRegistry.IModel>;
@@ -207,8 +227,17 @@ export class CanvasPanel extends Widget {
   private _mdCache = new Map<string, Promise<string>>();
   /** The viewport as last seen while the panel was visible — kept
    * fresh by the library's own `onRefresh` hook, which fires on
-   * every pan / zoom / resize — so a tab switch can put it back. */
+   * every pan / zoom / resize — so a tab switch can put it back.
+   * Never overwritten by a view captured while a load is in flight:
+   * see `_suppressStash`. */
   private _lastVisibleView: ICanvasView | null = null;
+  /** Loads in flight. While > 0, the `onRefresh` subscriber does not
+   * touch `_lastVisibleView`: a load re-fits the board, and the
+   * library fires `onRefresh` synchronously while it does so, so an
+   * unfrozen stash would capture the fit itself and every restore
+   * after that would put the fit back. A counter, not a boolean, so
+   * two overlapping loads cannot clear each other's freeze. */
+  private _suppressStash = 0;
   /** True once the library has reported a zero-size resize, i.e. the
    * panel was hidden; cleared when a real size returns. */
   private _hiddenByResize = false;
@@ -682,6 +711,21 @@ export class CanvasPanel extends Widget {
   }
 
   /**
+   * Lift one load's freeze on the viewport stash, once the post-load
+   * restore has run (or the load turned out not to need one). When
+   * the counter reaches zero and a view is given, point the stash at
+   * it — used when a load changed the board's geometry and the fresh
+   * fit stands, so the stash stays truthful for the new board
+   * instead of pointing at a viewport for the old one.
+   */
+  private _liftStashFreeze(view?: ICanvasView | null): void {
+    this._suppressStash = Math.max(0, this._suppressStash - 1);
+    if (this._suppressStash === 0 && view) {
+      this._lastVisibleView = view;
+    }
+  }
+
+  /**
    * Put the viewport back where `_captureView` found it, by writing
    * the pan / zoom straight into the library's DataManager and
    * redrawing — see the header comment for why this does not go
@@ -725,12 +769,26 @@ export class CanvasPanel extends Widget {
       // place — two animation frames land after Lumino has processed
       // the update and the viewer's redraw loop has run. If the edit
       // changed the board's geometry, the fresh fit stands instead.
+      // The stash is frozen across the load (see `_suppressStash`):
+      // the library fires `onRefresh` synchronously while it re-fits,
+      // and without the freeze the stash would capture the fit
+      // itself, so the restore below would put the fit back instead
+      // of the user's view — which is exactly how a tab switch used
+      // to end at the fit view: showing the tab re-renders the panel,
+      // the load fits, and the restore was handed the fit.
       const previous = this._captureView();
-      this._viewer.load({ canvas: data });
+      this._suppressStash++;
+      try {
+        this._viewer.load({ canvas: data });
+      } catch (error) {
+        this._liftStashFreeze();
+        throw error;
+      }
       if (previous) {
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             if (this.isDisposed || !this._viewer) {
+              this._liftStashFreeze();
               return;
             }
             const current = this._captureView();
@@ -743,6 +801,9 @@ export class CanvasPanel extends Widget {
                 Math.abs(current.maxX - previous.maxX) > 0.5 ||
                 Math.abs(current.maxY - previous.maxY) > 0.5)
             ) {
+              // Geometry changed: the fresh fit stands. Point the
+              // stash at it so it stays truthful for the new board.
+              this._liftStashFreeze(current);
               return;
             }
             // Prefer the last viewport seen while visible: `previous`
@@ -751,8 +812,11 @@ export class CanvasPanel extends Widget {
             // resize handling — and restoring it would put the shifted
             // view back over a good one.
             this._restoreView(this._lastVisibleView ?? previous);
+            this._liftStashFreeze();
           });
         });
+      } else {
+        this._liftStashFreeze();
       }
       return;
     }
@@ -789,6 +853,13 @@ export class CanvasPanel extends Widget {
     // the panel was opened in a background tab).
     viewer.onRefresh.subscribe(() => {
       if (this.isDisposed) {
+        return;
+      }
+      // A load just re-fit the board; the fit is not a viewport the
+      // user chose, so it must never enter the stash — the restore
+      // after the load puts back the last viewport seen while
+      // visible instead (see `_suppressStash`).
+      if (this._suppressStash > 0) {
         return;
       }
       if (this._host.clientWidth > 0 && this._host.clientHeight > 0) {
