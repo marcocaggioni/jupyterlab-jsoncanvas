@@ -41,6 +41,14 @@
 // re-render would drop the user back to the fit view. The panel saves
 // the pan / zoom before each load and restores it afterwards (unless
 // the board's geometry changed, in which case the fresh fit stands).
+// The same stash also covers tab switches: the library's
+// ResizeObserver re-centres the board on every container resize,
+// including the trip to 0×0 when the panel is hidden — and on the way
+// back its re-centring is a no-op (its lastResizeCenter is 0,0, which
+// its guard treats as "no previous centre"), so each hide/show would
+// leave the board shifted by half a viewport. The panel keeps the
+// last viewport seen while visible and puts it back when a real size
+// returns, using the library's own `onResize` / `onRefresh` hooks.
 
 import { Contents } from '@jupyterlab/services';
 import { CommandRegistry } from '@lumino/commands';
@@ -181,6 +189,13 @@ export class CanvasPanel extends Widget {
    * canvas JSON is edited in another pane) do not re-fetch. A save of
    * the file drops its entry, so the next render picks up the edit. */
   private _mdCache = new Map<string, Promise<string>>();
+  /** The viewport as last seen while the panel was visible — kept
+   * fresh by the library's own `onRefresh` hook, which fires on
+   * every pan / zoom / resize — so a tab switch can put it back. */
+  private _lastVisibleView: ICanvasView | null = null;
+  /** True once the library has reported a zero-size resize, i.e. the
+   * panel was hidden; cleared when a real size returns. */
+  private _hiddenByResize = false;
 
   constructor(
     context: DocumentRegistry.IContext<DocumentRegistry.IModel>,
@@ -716,6 +731,47 @@ export class CanvasPanel extends Widget {
     // Frame the whole board once the viewer has started.
     viewer.onStart.subscribe(() => {
       viewer.resetView();
+    });
+    // The library re-centres the board on every container resize,
+    // including the trip to 0×0 when this panel is hidden by a tab
+    // switch: the offsets shift by half a viewport, and the return
+    // trip is a no-op in the library (see the header comment), so the
+    // board would come back off-screen — further off with every
+    // switch. Both hooks below are the library's own: `onRefresh`
+    // fires whenever the viewport changes, `onResize` after each
+    // resize, with the new size. While visible, keep the viewport
+    // stashed; when a real size returns after a zero size, put the
+    // stash back (or fit the board if there is no stash yet, e.g.
+    // the panel was opened in a background tab).
+    viewer.onRefresh.subscribe(() => {
+      if (this.isDisposed) {
+        return;
+      }
+      if (this._host.clientWidth > 0 && this._host.clientHeight > 0) {
+        const view = this._captureView();
+        if (view) {
+          this._lastVisibleView = view;
+        }
+      }
+    });
+    viewer.onResize.subscribe((width, height) => {
+      const current = this._viewer;
+      if (this.isDisposed || !current) {
+        return;
+      }
+      if (width > 0 && height > 0) {
+        if (!this._hiddenByResize) {
+          return;
+        }
+        this._hiddenByResize = false;
+        if (this._lastVisibleView) {
+          this._restoreView(this._lastVisibleView);
+        } else {
+          current.resetView();
+        }
+      } else {
+        this._hiddenByResize = true;
+      }
     });
   }
 }

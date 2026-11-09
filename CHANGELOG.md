@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.1 — 2026-11-08
+
+- **The board survives tab switches.** Switching to another Lab tab
+  and back used to leave the viewer blank with the board off-screen
+  until Reset. Cause, in the library: its `ResizeObserver` re-centres
+  the board on every container resize, including the trip to 0×0 when
+  the panel is hidden — and on the way back its re-centring is a
+  no-op, because its `lastResizeCenter` is 0,0, which its guard treats
+  as "no previous centre". Each hide/show therefore shifted the board
+  by half a viewport. The panel now keeps the last viewport seen
+  while visible (via the library's own `onRefresh` hook, which fires
+  on every pan / zoom / resize) and puts it back when the library
+  reports a real size after a zero size (`onResize`); if there is no
+  stashed viewport yet, e.g. the panel was opened in a background
+  tab, it fits the board instead. No board change — code only.
+- In-place text editing, Markdown file cards, and JSON-pane live
+  editing are unchanged.
+
 ## 0.4.0 — 2026-11-08
 
 - **Text cards edit in place.** Double-click a text card and it turns
