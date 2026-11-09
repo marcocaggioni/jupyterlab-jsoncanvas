@@ -157,5 +157,5 @@
   "style": "style/index.css",
   "styleModule": "style/index.js",
   "types": "lib/index.d.ts",
-  "version": "0.4.1"
+  "version": "0.4.2"
 }

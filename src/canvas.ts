@@ -48,7 +48,18 @@
 // its guard treats as "no previous centre"), so each hide/show would
 // leave the board shifted by half a viewport. The panel keeps the
 // last viewport seen while visible and puts it back when a real size
-// returns, using the library's own `onResize` / `onRefresh` hooks.
+// returns, using the library's own `onResize` / `onRefresh` hooks —
+// and when the panel itself is shown again, as a second trigger.
+// Restores write the pan / zoom straight into the library's
+// DataManager instead of going through its pan / zoom commands: those
+// are animated by an internal lubricator (a dispatched pan / zoom is
+// applied a quarter at a time over many frames, and a pending one is
+// thrown away if the pointer handling stops), so a restore through
+// them can land late, land twice, or never land at all — and the
+// stash can be re-captured mid-animation, still shifted. A direct
+// write lands exactly, at once, and is idempotent — restoring twice
+// is the same as restoring once — so the resize hook, the show hook,
+// and the post-load restore can never fight each other.
 
 import { Contents } from '@jupyterlab/services';
 import { CommandRegistry } from '@lumino/commands';
@@ -78,6 +89,11 @@ import { canvasIcon } from './icons';
 type CanvasViewer = JSONCanvasViewerInterface<
   [typeof Controls, typeof Minimap]
 >;
+
+/** The plugin version, stamped on the panel node so a live check can
+ * read which version is actually running from the page. Keep in sync
+ * with package.json. */
+const VERSION = '0.4.2';
 
 /** What a canvas panel needs from the app: the contents API for
  * Markdown file nodes, and the command registry to open files. */
@@ -207,6 +223,7 @@ export class CanvasPanel extends Widget {
     this._commands = options.commands;
     this.addClass('jp-JSONCanvas');
     this.node.setAttribute('tabindex', '0');
+    this.node.setAttribute('data-jsoncanvas-version', VERSION);
 
     this._host = document.createElement('div');
     this._host.className = 'jp-JSONCanvas-host';
@@ -240,6 +257,26 @@ export class CanvasPanel extends Widget {
     super.onAfterAttach(msg);
     // The viewer needs a laid-out container to fit the board.
     this.update();
+  }
+
+  protected onAfterShow(msg: Message): void {
+    super.onAfterShow(msg);
+    // Second trigger for the tab-switch restore, alongside the
+    // library's resize hook: if anything re-fit the board while the
+    // panel was hidden, put the last visible viewport back once the
+    // panel is laid out again. Two animation frames land after the
+    // layout has settled; the restore is a direct write, so running
+    // it twice (here and from the resize hook) is harmless.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (this.isDisposed || !this._viewer || !this._lastVisibleView) {
+          return;
+        }
+        if (this._host.clientWidth > 0 && this._host.clientHeight > 0) {
+          this._restoreView(this._lastVisibleView);
+        }
+      });
+    });
   }
 
   protected onUpdateRequest(msg: Message): void {
@@ -645,9 +682,12 @@ export class CanvasPanel extends Widget {
   }
 
   /**
-   * Put the viewport back where `_captureView` found it, through the
-   * viewer's own pan / zoom. The zoom is restored first (around the
-   * container centre), then the pan, which sets the offsets exactly.
+   * Put the viewport back where `_captureView` found it, by writing
+   * the pan / zoom straight into the library's DataManager and
+   * redrawing — see the header comment for why this does not go
+   * through the viewer's (lubricated) pan / zoom commands. The write
+   * is synchronous and exact, and repeating it is a no-op, so
+   * several restore triggers can never fight each other.
    */
   private _restoreView(view: ICanvasView): void {
     const viewer = this._viewer;
@@ -655,12 +695,11 @@ export class CanvasPanel extends Widget {
       return;
     }
     try {
-      const centre = {
-        x: this._host.clientWidth / 2,
-        y: this._host.clientHeight / 2
-      };
-      viewer.zoomToScale(view.scale, centre);
-      viewer.panToCoords({ x: view.offsetX, y: view.offsetY });
+      const data = viewer.container.get(internal.DataManager).data;
+      data.offsetX = view.offsetX;
+      data.offsetY = view.offsetY;
+      data.scale = view.scale;
+      viewer.refresh();
     } catch (error) {
       console.warn(
         '[jupyterlab-jsoncanvas] Could not restore the view after a re-render:',
@@ -706,7 +745,12 @@ export class CanvasPanel extends Widget {
             ) {
               return;
             }
-            this._restoreView(previous);
+            // Prefer the last viewport seen while visible: `previous`
+            // was captured at render time, which can be while the panel
+            // was hidden — i.e. already shifted by the library's
+            // resize handling — and restoring it would put the shifted
+            // view back over a good one.
+            this._restoreView(this._lastVisibleView ?? previous);
           });
         });
       }

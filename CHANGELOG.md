@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.4.2 — 2026-11-09
+
+- **Tab switches keep the board in view — for real this time.**
+  The 0.4.1 fix did not hold in a live check (3/3 tab switches left
+  the board off-screen, zoom kept, pan lost). Two things were wrong,
+  and both are fixed here. First, the 0.4.1 restore went through the
+  library's own pan / zoom commands, which are animated by an
+  internal lubricator: a dispatched pan / zoom is applied a quarter
+  at a time over many frames, and a pending one is thrown away if the
+  pointer handling stops — so a restore could land late, land twice,
+  or never land, and the viewport stash could be re-captured
+  mid-animation, still shifted. Restores now write the pan / zoom
+  straight into the library's DataManager and redraw at once: exact,
+  synchronous, and idempotent, so the resize hook, the show hook,
+  and the post-load restore can never fight each other. Second, the
+  post-load restore could re-apply a viewport captured while the
+  panel was hidden (already shifted) over a good one; it now prefers
+  the last viewport seen while visible. A panel-show hook
+  (`onAfterShow`) restores the last visible viewport as a second
+  trigger alongside the resize hook. The panel also stamps its
+  version (`data-jsoncanvas-version`) on its own node, so a live
+  check can read which version is actually running from the page.
+  (One live-check caveat also stands: the 0.4.1 check ran two minutes
+  after the deploy, inside GitHub Pages' 10-minute CDN cache window,
+  so it may have run the 0.4.0 bundle instead of 0.4.1 — the new
+  version stamp exists so the next check can tell.)
+- In-place text editing, Markdown file cards, and JSON-pane live
+  editing are unchanged.
+
 ## 0.4.1 — 2026-11-08
 
 - **The board survives tab switches.** Switching to another Lab tab
